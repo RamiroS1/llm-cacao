@@ -1,5 +1,5 @@
 """
-Dr. Agro - Sistema RAG con Gradio (Diseño Moderno)
+Dr. agro - Sistema RAG con Gradio (Diseño Moderno)
 """
 
 import os
@@ -33,7 +33,7 @@ CORPUS_CONFIG = {
         "docs_name": "university_docs.pkl",
         "description": "📚 Base de conocimiento completa"
     },
-    "Dr. Agro Específico": {
+    "Dr. agro Específico": {
         "path_root": "./llm_cacao-dragro",
         "index_name": "profiles_index.faiss",
         "docs_name": "profiles_docs.pkl",
@@ -419,9 +419,9 @@ def crear_interfaz_chat():
 
                 # Chatbot principal
                 default_msgs = [
-                    {"role": "assistant", "content": "👋 ¡Hola! Soy Dr. Agro, tu asistente especializado en cacao. ¿En qué puedo ayudarte hoy?"}
+                    {"role": "assistant", "content": "👋 ¡Hola! Soy Dr. agro, tu asistente especializado en cacao. ¿En qué puedo ayudarte hoy?"}
                 ]
-                default_tuples = [(None, "👋 ¡Hola! Soy Dr. Agro, tu asistente especializado en cacao. ¿En qué puedo ayudarte hoy?")]
+                default_tuples = [(None, "👋 ¡Hola! Soy Dr. agro, tu asistente especializado en cacao. ¿En qué puedo ayudarte hoy?")]
 
                 chatbot = gr.Chatbot(
                     value=default_msgs,
@@ -460,9 +460,9 @@ def crear_interfaz_chat():
 
                 def clear():
                     default_msgs = [
-                        {"role": "assistant", "content": "👋 ¡Hola! Soy Dr. Agro, tu asistente especializado en cacao. ¿En qué puedo ayudarte hoy?"}
+                        {"role": "assistant", "content": "👋 ¡Hola! Soy Dr. agro, tu asistente especializado en cacao. ¿En qué puedo ayudarte hoy?"}
                     ]
-                    default_tuples = [(None, "👋 ¡Hola! Soy Dr. Agro, tu asistente especializado en cacao. ¿En qué puedo ayudarte hoy?")]
+                    default_tuples = [(None, "👋 ¡Hola! Soy Dr. agro, tu asistente especializado en cacao. ¿En qué puedo ayudarte hoy?")]
                     return default_msgs, default_tuples, ""
 
                 btn_enviar.click(submit, [user_input, chatbot, history_tuples], [chatbot, history_tuples, user_input])
@@ -477,7 +477,7 @@ def crear_interfaz_chat():
                 gr.Markdown("""
                 **Corpus Disponibles:**
                 - 📚 BAC (Cacao)
-                - 🌱 Dr. Agro Específico
+                - 🌱 Dr. agro Específico
                 
                 **Funciones:**
                 - Consultas sobre enfermedades
@@ -520,7 +520,7 @@ def crear_interfaz_chat():
 # ============================================
 if __name__ == "__main__":
     print("=" * 60)
-    print("🚀 Dr. Agro - Sistema RAG (Interfaz Moderna)")
+    print("🚀 Dr. agro - Sistema RAG (Interfaz Moderna)")
     print("=" * 60)
     
     if os.path.exists("images/image.png"):

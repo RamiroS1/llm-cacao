@@ -71,6 +71,9 @@ def main():
     args = ap.parse_args()
 
     items = load_jsonl(args.input_jsonl)
+    
+    print("Total valid items loaded:", len(items))
+    
     if not items:
         raise SystemExit("No valid JSON objects found in the input file.")
 

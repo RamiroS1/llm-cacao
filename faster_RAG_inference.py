@@ -2,7 +2,9 @@ import os
 import argparse
 import dspy
 
-from utils import RerankedFaissRetriever, UniversityRAGChain, clean_output
+import time
+
+from utils import RerankedFaissRetriever, UniversityRAGChain, clean_output, faster_UniversityRAGChain
 
 # ¿Podrías explicarme qué es el cultivo agroforestal?
 # Quisiera saber más sobre la cadena de cacao
@@ -23,19 +25,22 @@ lm = dspy.LM(
         "format": "json",
         "options": {
             # ↓ decoding / output size
-            "num_ctx": 4096,                 # smaller context = faster KV ops
-            "num_predict": 256,              # HARD cap on output tokens (biggest win)
+            "num_ctx": 3072,                 # smaller context = faster KV ops
+            "num_predict": 160,              # HARD cap on output tokens (biggest win)  default 256
             "top_k": 30, "top_p": 0.9,       # stable decoding
             "repeat_penalty": 1.05,
 
             # ↓ runtime throughput (tune to your box)
             "num_thread": os.cpu_count(),    # CPU threads if you’re CPU-bound
-            "num_batch": 512,                # larger = fewer passes (needs VRAM)
+            "num_batch": 1024,                # larger = fewer passes (needs VRAM)
             "seed": 0,
 
             # ↓ GPU offload (if you have a GPU with enough VRAM)
             # -1 = offload as many layers as possible
-            "num_gpu": -1
+            "num_gpu": -1,
+            "keep_alive": "30m",
+            "stop": ["\n}\n", "\n\n", "</s>"]
+            
         }
     }
 )
@@ -59,10 +64,17 @@ if hasattr(retriever, "k_rerank"):
 if hasattr(retriever, "use_reranker"):
     retriever.use_reranker = False
 
+#chain = UniversityRAGChain(retriever=retriever, model_match=name_model_match)
 
-chain = UniversityRAGChain(retriever=retriever, model_match=name_model_match)
+# faster
+chain = faster_UniversityRAGChain(retriever=retriever, top_n=4)
+
 
 user_question = args.question
 
+start = time.perf_counter()
 response, context = chain(user_question, ext_context="")
-print(f"PREGUNTA: {user_question} \n\n RESPUESTA {clean_output(response["answer"])}")
+end = time.perf_counter()
+
+print(f"PREGUNTA: {user_question} \n\n RESPUESTA {clean_output(response['answer'])}")
+print(f"⏱ Total RAG response time: {end - start:.2f} seconds")

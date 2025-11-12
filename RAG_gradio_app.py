@@ -84,7 +84,13 @@ def load_corpus(corpus_name):
             return False, "❌ Archivos no encontrados"
         
         retriever = RerankedFaissRetriever(path_faiss, path_docs)
-        chain = UniversityRAGChain(retriever=retriever)
+        
+        # ⭐ AGREGAR EL PARÁMETRO model_match
+        chain = UniversityRAGChain(
+            retriever=retriever,
+            model_match='intfloat/multilingual-e5-large'  # Mismo modelo que usa el retriever
+        )
+        
         retrievers[corpus_name] = retriever
         chains[corpus_name] = chain
         current_corpus = corpus_name
@@ -428,7 +434,7 @@ def crear_interfaz_chat():
                     type="messages",
                     show_label=False,
                     elem_id="chatbot_main",
-                    avatar_images=(None, "🌱"),
+                    avatar_images=(None, "images/iconchatbot.png"),
                     bubble_full_width=False
                 )
 

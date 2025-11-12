@@ -13,6 +13,7 @@ import faiss
 
 parser = argparse.ArgumentParser('extract text from .pdf files', add_help=False)
 parser.add_argument('--path_root', default="./04-Prototipar/4.1-Fuentes de Datos/4.1.1-GET_BAC_PUSH_BloB/downloads", type=str, help='path to root data folder')
+parser.add_argument('--save_qa', default="dataQA.jsonl", type=str, help='file name to save Q&A dataset')
 parser.add_argument('--remove_headers', default=True, type=bool, help='flag to remove header text from pdf')
 parser.add_argument('--flag_rewrite', default=True, type=bool, help='flag to rewrite from exixting Q&A dataset')
 parser.add_argument('--skip_savedata', default=False, type=bool, help='flag to rewrite from exixting Q&A dataset')
@@ -44,7 +45,8 @@ dspy.configure(lm=lm)
 qa_generator = QAGenerator_safe()
 # qa_generator = QAGenerator_v1()
 
-path_qa = os.path.join(args.path_root, "dataQA.jsonl")
+# path_qa = os.path.join(args.path_root, "dataQA.jsonl")
+path_qa = os.path.join(args.path_root, args.save_qa)
 
 # number of filles found  
 containers = get_folders(args.path_root)
@@ -74,6 +76,8 @@ if not args.skip_savedata:
                 if exists_qa(Path(pdf).stem, path_qa):
                     print(f"(PDF: {num_pdf}) Q&A for {pdf.stem} already exists. Skipping...")
                     continue
+                
+                print(f"Processing document: {pdf.stem}")
                 
                 text, tables = extract_text_from_pdf(pdf, remove_h=args.remove_headers)
                 text = text.encode("utf-8", errors="replace").decode("utf-8")
@@ -114,7 +118,7 @@ if not args.skip_savedata:
                 # Q&A from paragraphs
                 for ii, prg in enumerate(paragraphs):
                     
-                    print("oooooooo", prg)
+                    # print("oooooooo", prg)
                     
                     if prg:
                         qa_pair = qa_generator(entry=prg, subject=subject)
@@ -145,9 +149,9 @@ if not args.skip_savedata:
 
 embedder = SentenceTransformer('intfloat/multilingual-e5-large')
 
-path_fais = os.path.join(args.path_root, "university_index.faiss")
-path_colbert = os.path.join(args.path_root, "uis_corpus.tsv")
-path_docs = os.path.join(args.path_root, "university_docs.pkl")
+path_fais = os.path.join(args.path_root, "university_index_clean.faiss")
+path_colbert = os.path.join(args.path_root, "uis_corpus_clean.tsv")
+path_docs = os.path.join(args.path_root, "university_docs_clean.pkl")
 
 if Path(path_qa).exists():
     

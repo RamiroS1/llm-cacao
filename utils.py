@@ -6,6 +6,10 @@ from io import BytesIO
 
 import dspy
 import faiss
+# If IVF/PQ:
+gpu_index.nprobe = 8   # start 8→12→16 if recall needs it
+
+
 import pickle
 
 import pandas as pd
@@ -32,6 +36,11 @@ from sentence_transformers import util
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from signatures import UniversityRAG
+
+import torch
+torch.backends.cuda.matmul.allow_tf32 = True     # Ampere+
+torch.backends.cudnn.allow_tf32 = True
+torch.set_float32_matmul_precision("high")
 
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=800,        # total characters
@@ -657,12 +666,16 @@ class RerankedFaissRetriever:
         # self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
         # self.embedder = SentenceTransformer('all-mpnet-base-v2')
         # self.embedder = SentenceTransformer('intfloat/e5-large-v2')
-        self.embedder = SentenceTransformer(model_match)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.embedder = SentenceTransformer(model_match, device=device)
+        #self.embedder = self.embedder.half()
+        
         self.k = k
         # self.reranker_model = reranker_model or dspy.Predict("question, document -> relevance_score")
         self.reranker_model = reranker_model or dspy.Predict(RelevanceScorer)
+        
     
-    def retrieve(self, query, top_n=3, len_context=5000):
+    def retrieve(self, query, top_n=3, len_context=5000, flag_embs=False):
         #model_match = SentenceTransformer('intfloat/multilingual-e5-large')
         
         cutoff_init = 0.8
@@ -671,9 +684,15 @@ class RerankedFaissRetriever:
         # query_embedding = normalize(self.embedder.encode([query]))
         D, I = self.index.search(query_embedding, self.k)
         candidates_ = [self.documents[i] for i in I[0]]
+        paras = [pag["paragraph"] for pag in candidates_]
 
         # remove near-duplicates candidates
-        candidates_embedding = self.embedder.encode([pag['paragraph'] for pag in candidates_], convert_to_tensor=True)
+        # candidates_embedding = self.embedder.encode([pag['paragraph'] for pag in candidates_], convert_to_tensor=True)
+        candidates_embedding = self.embedder.encode(
+        [f"passage: {p}" for p in paras],
+        convert_to_numpy=True,
+        normalize_embeddings=True
+    ).astype(np.float32)
 
         candidates = []
         seen_idx = set()
@@ -713,10 +732,155 @@ class RerankedFaissRetriever:
             ranked_text = "\n\n".join(
                 f"{doc['subject']}\n{doc['paragraph']}" for doc in filtered_text
             )
+            
+        if flag_embs:
+            # Return both docs and their (normalized) embeddings for those docs
+            # Convert embeddings to NumPy array of shape (len(filtered_text), d)
+            matched_embs = np.array([
+                candidates_embedding[paras.index(doc["paragraph"])]
+                for doc in filtered_text
+            ], dtype=np.float32)
+            return filtered_text, matched_embs
 
         # return [doc for doc, _ in ranked[:top_n]]
         return filtered_text
+
+def _cosine_sim(a, b):
+    # a: (d,) or (1,d); b: (N,d)
+    a = a / (np.linalg.norm(a, axis=-1, keepdims=True) + 1e-12)
+    b = b / (np.linalg.norm(b, axis=-1, keepdims=True) + 1e-12)
+    return (a @ b.T).reshape(-1)
+
+class faster_UniversityRAGChain(dspy.Module):
+    def __init__(
+        self,
+        retriever,
+        model_match="intfloat/multilingual-e5-base",   # smaller than -large for speed
+        top_n=8,               # fewer retrieved docs
+        cutoff=0.75,           # similarity cutoff
+        max_matched=6,         # cap how many matched docs we concatenate
+        max_context_chars=5000 # hard cap for assembled context
+    ):
+        super().__init__()
+        self.retriever = retriever
+        self.model = dspy.Predict(UniversityRAG)
+        
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Loading sentence transformer for reranking on device: {device}")
+        
+        self.model_match = SentenceTransformer(model_match, device=device)
+        self.model_match = self.model_match.half()
+        
+        if device == "cuda":
+            try:
+                self.model_match = self.model_match.half()
+            except Exception:
+                pass
+            
+        self.top_n = top_n
+        self.cutoff = cutoff
+        self.max_matched = max_matched
+        self.max_context_chars = max_context_chars
+        
+        # Simple in-memory cache for doc embeddings by paragraph text
+        self._emb_cache = {} 
     
+    def _encode_query(self, q: str) -> np.ndarray:
+        with torch.inference_mode():
+            emb = self.model_match.encode(
+                [f"query: {q}"],
+                convert_to_numpy=True,
+                batch_size=64,
+                normalize_embeddings=True
+            )[0]
+        return emb.astype(np.float32)
+    
+    def _encode_paragraphs(self, paras):
+    # Use cache when possible; batch-encode misses
+        to_encode = [p for p in paras if p not in self._emb_cache]
+        if to_encode:
+            with torch.inference_mode():
+                embs = self.model_match.encode(
+                    [f"passage: {p}" for p in to_encode],
+                    convert_to_numpy=True,
+                    batch_size=128,
+                    normalize_embeddings=True
+                )
+            for p, e in zip(to_encode, embs):
+                self._emb_cache[p] = e.astype(np.float32)
+        return np.stack([self._emb_cache[p] for p in paras], axis=0)
+        
+    def _assemble_context(self, docs):
+    # join until max_context_chars is reached
+        parts, total = [], 0
+        for doc in docs:
+            piece = f"{doc['subject']}\n{doc['paragraph']}"
+            need = len(piece) + (2 if parts else 0)  # account for double newlines
+            if total + need > self.max_context_chars:
+                break
+            parts.append(piece)
+            total += need
+        return "\n\n".join(parts) if parts else "No se encontró contexto relevante."
+        
+        
+    def forward(self, question, ext_context):
+        if ext_context:
+            pre_answer = self.model(question=question, context=ext_context)
+                
+            ans_len = len(pre_answer.get("answer", ""))
+            rea_len = len(pre_answer.get("reasoning", ""))
+            allowance = max(1200, self.max_context_chars - (ans_len + min(rea_len, 1000)))
+        else:
+            pre_answer, allowance = None, self.max_context_chars
+                
+        # 2) Retrieve fewer docs quickly
+        docs = self.retriever.retrieve(question, top_n=self.top_n, len_context=allowance)
+        # docs, d_embs = self.retriever.retrieve(question, top_n=self.top_n, len_context=allowance, flag_embs=True)
+    
+        if not docs:
+            context = "No se encontró contexto relevante."
+            final = self.model(question=question, context=context)
+            return final, context
+            
+        doc_texts = [doc['paragraph'].strip() for doc in docs]
+            
+        q_emb = self._encode_query(question.strip())
+        d_embs = self._encode_paragraphs(doc_texts)
+        
+            
+        #sims = _cosine_sim(q_emb[None, :], d_embs)   # (N,)
+        sims = d_embs @ q_emb
+        order = np.argsort(-sims)
+        keep = []
+        for idx in order:
+            if sims[idx] < self.cutoff:
+                continue
+            keep.append((idx, sims[idx]))
+            if len(keep) >= self.max_matched:
+                break
+                
+        matched_docs = [docs[i] for i, _ in keep] if keep else [docs[order[0]]]
+            
+        # 4) Assemble compact context
+        context = self._assemble_context(matched_docs)
+            
+        if pre_answer:
+            addon = pre_answer.get("answer", "")
+            rea = pre_answer.get("reasoning", "")
+            extra = "Contexto a partir de Internet:\n" + (addon + ("\n" + rea if len(rea) <= 1000 else ""))
+            # Fit the add-on within remaining budget
+            rem = max(0, self.max_context_chars - len(context) - 2)
+            if rem > 0 and extra:
+                context = (context + "\n\n" + extra[:rem]) if context else extra[:rem]
+            return self.model(question=question, context=context), context
+            
+        # 6) Normal path
+        return self.model(question=question, context=context), context
+    # key: str(paragraph), val: np.ndarray (d,)
+        
+        
+
+
     
 class UniversityRAGChain(dspy.Module):
     def __init__(self, retriever, model_match):

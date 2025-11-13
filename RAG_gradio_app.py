@@ -46,11 +46,11 @@ RAG_CONFIG = {
         "use_faster": False,
         "top_n": 10
     },
-    "RAG 3 - Zonas Productoras": {
+    "RAG 3 - Configurado": {
         "path_root": "./04-Prototipar/4.1-Fuentes de Datos/4.1.1-GET_BAC_PUSH_BloB/downloads",
         "index_name": "university_index.faiss",
         "docs_name": "university_docs.pkl",
-        "description": "🗺️ Información sobre zonas productoras y cultivos agroforestales",
+        "description": "🗺️ Configurado",
         "model_match": "intfloat/multilingual-e5-large",
         "use_faster": True,  # Usar faster_UniversityRAGChain
         "top_n": 4

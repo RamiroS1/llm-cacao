@@ -7,9 +7,7 @@ from io import BytesIO
 import dspy
 import faiss
 # If IVF/PQ:
-gpu_index.nprobe = 8   # start 8→12→16 if recall needs it
-
-
+#gpu_index.nprobe = 8   # start 8→12→16 if recall needs it
 import pickle
 
 import pandas as pd

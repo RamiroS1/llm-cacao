@@ -7,7 +7,7 @@ import os
 import base64
 import gradio as gr
 import dspy
-from utils import RerankedFaissRetriever, UniversityRAGChain, faster_UniversityRAGChain, clean_output
+from rag_creation.utils import RerankedFaissRetriever, UniversityRAGChain, faster_UniversityRAGChain, clean_output
 from datetime import datetime
 import traceback
 

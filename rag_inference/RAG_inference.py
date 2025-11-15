@@ -2,7 +2,7 @@ import os
 import argparse
 import dspy
 
-from utils import RerankedFaissRetriever, UniversityRAGChain, clean_output
+from rag_creation.utils import RerankedFaissRetriever, UniversityRAGChain, clean_output
 
 # ¿Podrías explicarme qué es el cultivo agroforestal?
 # Quisiera saber más sobre la cadena de cacao

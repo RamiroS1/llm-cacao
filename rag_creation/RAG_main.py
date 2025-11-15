@@ -4,8 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
-from utils import *
-from signatures import *
+from rag_creation.utils import *
+from rag_creation.signatures import *
 
 from sklearn.preprocessing import normalize
 from sentence_transformers import SentenceTransformer

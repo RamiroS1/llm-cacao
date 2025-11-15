@@ -33,7 +33,7 @@ from sentence_transformers import SentenceTransformer
 from sentence_transformers import util
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from signatures import UniversityRAG
+from rag_creation.signatures import UniversityRAG
 
 import torch
 torch.backends.cuda.matmul.allow_tf32 = True     # Ampere+

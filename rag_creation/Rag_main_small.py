@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from utils import *
+from rag_creation.utils import *
 
 parser = argparse.ArgumentParser('extract text from .pdf files', add_help=False)
 parser.add_argument('--path_root', default="./llm_cacao-dragro", type=str, help='path to root data folder')

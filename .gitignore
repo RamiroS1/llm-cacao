@@ -10,3 +10,5 @@ sesiones/
 env_llms/
 downloads/
 .venv/
+data/
+wheels/

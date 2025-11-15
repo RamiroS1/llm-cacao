@@ -14,6 +14,10 @@ import numpy as np
 device = "cuda:0"
 model_path = "DAMO-NLP-SG/VideoLLaMA3-7B"
 
+# Directorio para guardar resultados JSON
+OUTPUT_DIR = Path("./resultados_inferencia")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
 print(">>> Cargando modelo optimizado para GPU de 24GB...")
 
 # Configuración de atención optimizada
@@ -81,10 +85,9 @@ def obtener_metricas_sistema():
             "gpu_memory_reserved_mb": round(gpu_memory_reserved_mb, 2),
             "cpu_usage_percent": round(cpu_usage, 2),
             "ram_usage_mb": round(ram_usage_mb, 2),
-            "temperature_gpu_c": gpu_temp  # Placeholder
+            "temperature_gpu_c": gpu_temp
         }
     except Exception as e:
-        print(f"⚠ Error obteniendo métricas: {e}")
         return {}
 
 def calcular_hallucination_score(response: str) -> float:
@@ -159,6 +162,40 @@ def generar_response_id():
     random_suffix = f"{np.random.randint(1000, 9999)}"
     return f"resp_{timestamp}_{random_suffix}"
 
+def guardar_resultado_json(respuesta: str, metricas: dict, video_path: str, pregunta: str):
+    """
+    Guarda el resultado completo en un archivo JSON
+    
+    Args:
+        respuesta: Respuesta del modelo
+        metricas: Diccionario con todas las métricas
+        video_path: Ruta del video analizado
+        pregunta: Pregunta realizada
+    
+    Returns:
+        str: Ruta del archivo JSON creado
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"resultado_{timestamp}_{metricas['comportamiento']['response_id']}.json"
+    filepath = OUTPUT_DIR / filename
+    
+    resultado_completo = {
+        "metadata": {
+            "video_path": str(video_path),
+            "pregunta": pregunta,
+            "modelo": "VideoLLaMA3-7B",
+            "timestamp": datetime.now().isoformat()
+        },
+        "respuesta": respuesta,
+        "metricas": metricas
+    }
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(resultado_completo, f, indent=2, ensure_ascii=False)
+    
+    print(f"\n💾 Resultado guardado en: {filepath}")
+    return str(filepath)
+
 # ---------------------------------------------
 # FUNCIÓN DE INFERENCIA CON MÉTRICAS
 # ---------------------------------------------
@@ -171,10 +208,26 @@ def analizar_video(
     use_sampling: bool = False,
     temperature: float = 0.7,
     top_p: float = 0.9,
-    mostrar_metricas: bool = True
+    mostrar_metricas: bool = True,
+    guardar_json: bool = True
 ):
     """
     Analiza un video y responde preguntas en español con métricas completas.
+    
+    Args:
+        video_path: Ruta al video
+        pregunta: Pregunta sobre el video
+        fps: Frames por segundo a extraer
+        max_frames: Máximo de frames a procesar
+        max_new_tokens: Tokens máximos en la respuesta
+        use_sampling: Si usar sampling (True) o greedy (False)
+        temperature: Control de creatividad
+        top_p: Nucleus sampling
+        mostrar_metricas: Si mostrar métricas en consola
+        guardar_json: Si guardar resultado en JSON
+    
+    Returns:
+        tuple: (respuesta, diccionario_metricas, ruta_json)
     """
     
     if not Path(video_path).exists():
@@ -192,7 +245,7 @@ def analizar_video(
     metricas_inicio = obtener_metricas_sistema()
     memoria_gpu_inicio = torch.cuda.memory_allocated(0) / (1024 ** 2)
     
-    # System prompt
+    # System prompt generalizado
     conversation = [
         {
             "role": "system",
@@ -305,97 +358,105 @@ def analizar_video(
     hallucination_score = calcular_hallucination_score(response)
     toxicity_score = calcular_toxicity_score(response)
     safety_check = toxicity_score < 0.3
-    bias_flag = False  # Placeholder para análisis más sofisticado
+    bias_flag = False
+    
+    # ============================================================
+    # CONSTRUCCIÓN DE MÉTRICAS
+    # ============================================================
+    metricas_comportamiento = {
+        "response_id": response_id,
+        "request_id": request_id,
+        "model_name": "VideoLLaMA3-7B",
+        "source_dataset": "Video-LLaMA-Dataset",
+        "prompt_template": "agricultural_video_analysis_v1",
+        "safety_check_passed": safety_check,
+        "bias_flag": bias_flag,
+        "toxicity_score": toxicity_score,
+        "hallucination_score": hallucination_score
+    }
+    
+    metricas_tiempo = {
+        "tiempo_total_ms": latency_ms,
+        "tiempo_procesamiento_ms": round(tiempo_procesamiento, 2),
+        "tiempo_generacion_ms": round(tiempo_generacion, 2),
+        "timestamp_inicio": timestamp_inicio.isoformat(),
+        "timestamp_fin": datetime.now().isoformat()
+    }
+    
+    metricas_modelo = {
+        "tokens_input": tokens_input,
+        "tokens_output": tokens_output,
+        "latency_ms": latency_ms,
+        "throughput_tps": throughput_tps,
+        "gpu_memory_mb": round(memoria_gpu_final, 2),
+        "gpu_memory_delta_mb": round(memoria_gpu_final - memoria_gpu_inicio, 2),
+        "model_name": "VideoLLaMA3-7B",
+        "mode": "inference",
+        "temperature": temperature if use_sampling else 0.0,
+        "context_length": 4096,
+        "prompt_tokens": tokens_input,
+        "response_tokens": tokens_output,
+        "max_new_tokens": max_new_tokens,
+        "fps": fps,
+        "max_frames": max_frames
+    }
+    
+    metricas_sistema = {
+        "timestamp": datetime.now().isoformat(),
+        "gpu_usage_percent": metricas_final.get("gpu_usage_percent", 0),
+        "gpu_memory_mb": metricas_final.get("gpu_memory_mb", 0),
+        "gpu_memory_reserved_mb": metricas_final.get("gpu_memory_reserved_mb", 0),
+        "cpu_usage_percent": metricas_final.get("cpu_usage_percent", 0),
+        "ram_usage_mb": metricas_final.get("ram_usage_mb", 0),
+        "temperature_gpu_c": metricas_final.get("temperature_gpu_c", 0),
+        "latency_ms": latency_ms,
+        "tokens_processed": tokens_input + tokens_output,
+        "throughput_tps": throughput_tps,
+        "model_name": "VideoLLaMA3-7B",
+        "model_version": "7B",
+        "device": obtener_nombre_gpu(),
+        "batch_size": 1,
+        "dtype": "bfloat16",
+        "attn_implementation": attn_backend
+    }
+    
+    metricas = {
+        "comportamiento": metricas_comportamiento,
+        "tiempo": metricas_tiempo,
+        "modelo": metricas_modelo,
+        "sistema": metricas_sistema
+    }
     
     # ============================================================
     # IMPRESIÓN DE MÉTRICAS
     # ============================================================
     if mostrar_metricas:
         print("\n" + "="*70)
-        print("📊 MÉTRICAS DE INFERENCIA")
+        print("📊 MÉTRICAS DE INFERENCIA - VideoLLaMA3")
         print("="*70)
-        
-        # 1. COMPORTAMIENTO DEL MODELO
-        metricas_comportamiento = {
-            "response_id": response_id,
-            "request_id": request_id,
-            "model_name": "VideoLLaMA3-7B",
-            "source_dataset": "Video-LLaMA-Dataset",
-            "prompt_template": "cacao_analysis_v1",
-            "safety_check_passed": safety_check,
-            "bias_flag": bias_flag,
-            "toxicity_score": toxicity_score,
-            "hallucination_score": hallucination_score
-        }
         
         print("\n1️⃣  COMPORTAMIENTO DEL MODELO:")
         print(json.dumps(metricas_comportamiento, indent=2, ensure_ascii=False))
         
-        # 2. TIEMPO DE RESPUESTA
-        metricas_tiempo = {
-            "tiempo_total_ms": latency_ms,
-            "tiempo_procesamiento_ms": round(tiempo_procesamiento, 2),
-            "tiempo_generacion_ms": round(tiempo_generacion, 2),
-            "timestamp_inicio": timestamp_inicio.isoformat(),
-            "timestamp_fin": datetime.now().isoformat()
-        }
-        
         print("\n2️⃣  TIEMPO DE RESPUESTA:")
         print(json.dumps(metricas_tiempo, indent=2, ensure_ascii=False))
         
-        # 3. DATOS DEL MODELO
-        metricas_modelo = {
-            "tokens_input": tokens_input,
-            "tokens_output": tokens_output,
-            "latency_ms": latency_ms,
-            "throughput_tps": throughput_tps,
-            "gpu_memory_mb": round(memoria_gpu_final, 2),
-            "gpu_memory_delta_mb": round(memoria_gpu_final - memoria_gpu_inicio, 2),
-            "model_name": "VideoLLaMA3-7B",
-            "mode": "inference",
-            "temperature": temperature if use_sampling else 0.0,
-            "context_length": 4096,
-            "prompt_tokens": tokens_input,
-            "response_tokens": tokens_output,
-            "max_new_tokens": max_new_tokens,
-            "fps": fps,
-            "max_frames": max_frames
-        }
-        
         print("\n3️⃣  DATOS DEL MODELO:")
         print(json.dumps(metricas_modelo, indent=2, ensure_ascii=False))
-        
-        # 4. MÉTRICAS DE SISTEMA
-        metricas_sistema = {
-            "timestamp": datetime.now().isoformat(),
-            "gpu_usage_percent": metricas_final.get("gpu_usage_percent", 0),
-            "gpu_memory_mb": metricas_final.get("gpu_memory_mb", 0),
-            "gpu_memory_reserved_mb": metricas_final.get("gpu_memory_reserved_mb", 0),
-            "cpu_usage_percent": metricas_final.get("cpu_usage_percent", 0),
-            "ram_usage_mb": metricas_final.get("ram_usage_mb", 0),
-            "temperature_gpu_c": metricas_final.get("temperature_gpu_c", 0),
-            "latency_ms": latency_ms,
-            "tokens_processed": tokens_input + tokens_output,
-            "throughput_tps": throughput_tps,
-            "model_name": "VideoLLaMA3-7B",
-            "model_version": "7B",
-            "device": obtener_nombre_gpu(),
-            "batch_size": 1,
-            "dtype": "bfloat16",
-            "attn_implementation": attn_backend
-        }
         
         print("\n4️⃣  MÉTRICAS DE SISTEMA:")
         print(json.dumps(metricas_sistema, indent=2, ensure_ascii=False))
         
         print("\n" + "="*70)
     
-    return response, {
-        "comportamiento": metricas_comportamiento,
-        "tiempo": metricas_tiempo,
-        "modelo": metricas_modelo,
-        "sistema": metricas_sistema
-    }
+    # ============================================================
+    # GUARDAR JSON
+    # ============================================================
+    json_path = None
+    if guardar_json:
+        json_path = guardar_resultado_json(response, metricas, video_path, pregunta)
+    
+    return response, metricas, json_path
 
 # ---------------------------------------------
 # EJEMPLOS DE USO
@@ -403,27 +464,32 @@ def analizar_video(
 if __name__ == "__main__":
     video_path = "./04-Prototipar/4.1-Fuentes de Datos/4.1.1-GET_BAC_PUSH_BloB/downloads/cacao20250916133108/video/Ver_video_36367.mp4"
     
+    resultados = []
+    
     # ============================================================
     # EJEMPLO 1: DETECCIÓN RÁPIDA
     # ============================================================
     print("\n" + "🔍"*35)
-    print("EJEMPLO 1: DETECCIÓN RÁPIDA DE PLAGAS")
+    print("EJEMPLO 1: DETECCIÓN RÁPIDA DE PROBLEMAS")
     print("🔍"*35)
     
-    respuesta, metricas = analizar_video(
+    respuesta1, metricas1, json1 = analizar_video(
         video_path=video_path,
-        pregunta="¿Qué plagas observas en el video?",
+        pregunta="¿Qué problemas fitosanitarios observas en el cultivo?",
         fps=0.5,
         max_frames=16,
         max_new_tokens=200,
         use_sampling=False,
-        mostrar_metricas=True
+        mostrar_metricas=True,
+        guardar_json=True
     )
     
     print(f"\n✅ RESPUESTA DEL MODELO:")
     print("-" * 70)
-    print(respuesta)
+    print(respuesta1)
     print("-" * 70)
+    
+    resultados.append({"ejemplo": "Rápido", "json_path": json1})
     
     gc.collect()
     torch.cuda.empty_cache()
@@ -433,21 +499,22 @@ if __name__ == "__main__":
     # EJEMPLO 2: ANÁLISIS DETALLADO
     # ============================================================
     print("\n" + "📊"*35)
-    print("EJEMPLO 2: ANÁLISIS DETALLADO")
+    print("EJEMPLO 2: ANÁLISIS DETALLADO DEL CULTIVO")
     print("📊"*35)
     
-    respuesta2, metricas2 = analizar_video(
+    respuesta2, metricas2, json2 = analizar_video(
         video_path=video_path,
         pregunta="""Analiza el video y describe:
-- Plagas o enfermedades presentes
+- Problemas o afectaciones visibles
 - Nivel de severidad observado
-- Estado general del cultivo""",
+- Estado general de las plantas""",
         fps=1,
         max_frames=24,
         max_new_tokens=400,
         use_sampling=True,
         temperature=0.6,
-        mostrar_metricas=True
+        mostrar_metricas=True,
+        guardar_json=True
     )
     
     print(f"\n✅ RESPUESTA DEL MODELO:")
@@ -455,19 +522,70 @@ if __name__ == "__main__":
     print(respuesta2)
     print("-" * 70)
     
-    # Resumen comparativo
-    print("\n" + "="*70)
-    print("📈 RESUMEN COMPARATIVO")
-    print("="*70)
-    print(f"\nEjemplo 1 (Rápido):")
-    print(f"  - Tiempo: {metricas['tiempo']['tiempo_total_ms']:.0f} ms")
-    print(f"  - Tokens: {metricas['modelo']['tokens_output']}")
-    print(f"  - Throughput: {metricas['modelo']['throughput_tps']:.2f} tokens/s")
-    print(f"  - Alucinación: {metricas['comportamiento']['hallucination_score']}")
+    resultados.append({"ejemplo": "Detallado", "json_path": json2})
     
-    print(f"\nEjemplo 2 (Detallado):")
-    print(f"  - Tiempo: {metricas2['tiempo']['tiempo_total_ms']:.0f} ms")
-    print(f"  - Tokens: {metricas2['modelo']['tokens_output']}")
-    print(f"  - Throughput: {metricas2['modelo']['throughput_tps']:.2f} tokens/s")
-    print(f"  - Alucinación: {metricas2['comportamiento']['hallucination_score']}")
+    gc.collect()
+    torch.cuda.empty_cache()
+    time.sleep(1)
+    
+    # ============================================================
+    # EJEMPLO 3: IDENTIFICACIÓN ESPECÍFICA
+    # ============================================================
+    print("\n" + "🌿"*35)
+    print("EJEMPLO 3: IDENTIFICACIÓN DE PLAGAS O ENFERMEDADES")
+    print("🌿"*35)
+    
+    respuesta3, metricas3, json3 = analizar_video(
+        video_path=video_path,
+        pregunta="¿Qué tipo de plagas o enfermedades se observan en las plantas? Describe los síntomas visibles.",
+        fps=0.75,
+        max_frames=20,
+        max_new_tokens=300,
+        use_sampling=True,
+        temperature=0.5,
+        mostrar_metricas=True,
+        guardar_json=True
+    )
+    
+    print(f"\n✅ RESPUESTA DEL MODELO:")
+    print("-" * 70)
+    print(respuesta3)
+    print("-" * 70)
+    
+    resultados.append({"ejemplo": "Específico", "json_path": json3})
+    
+    # ============================================================
+    # RESUMEN COMPARATIVO
+    # ============================================================
+    print("\n" + "="*70)
+    print("📈 RESUMEN COMPARATIVO DE EJEMPLOS")
+    print("="*70)
+    
+    ejemplos = [
+        ("Rápido (16 frames)", metricas1),
+        ("Detallado (24 frames)", metricas2),
+        ("Específico (20 frames)", metricas3)
+    ]
+    
+    for nombre, metricas in ejemplos:
+        print(f"\n{nombre}:")
+        print(f"  • Tiempo total: {metricas['tiempo']['tiempo_total_ms']:.0f} ms")
+        print(f"  • Tiempo procesamiento: {metricas['tiempo']['tiempo_procesamiento_ms']:.0f} ms")
+        print(f"  • Tiempo generación: {metricas['tiempo']['tiempo_generacion_ms']:.0f} ms")
+        print(f"  • Tokens generados: {metricas['modelo']['tokens_output']}")
+        print(f"  • Throughput: {metricas['modelo']['throughput_tps']:.2f} tokens/s")
+        print(f"  • Memoria GPU: {metricas['modelo']['gpu_memory_mb']:.0f} MB")
+        print(f"  • Score alucinación: {metricas['comportamiento']['hallucination_score']}")
+    
+    # ============================================================
+    # RESUMEN DE ARCHIVOS JSON GENERADOS
+    # ============================================================
+    print("\n" + "="*70)
+    print("📁 ARCHIVOS JSON GENERADOS")
+    print("="*70)
+    for resultado in resultados:
+        print(f"  • {resultado['ejemplo']}: {resultado['json_path']}")
+    
+    print("\n" + "="*70)
+    print("✅ PROCESO COMPLETADO")
     print("="*70)

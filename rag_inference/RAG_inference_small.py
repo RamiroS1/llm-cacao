@@ -2,7 +2,7 @@ import os
 import argparse
 import dspy
 
-from utils import RerankedFaissRetriever, UniversityRAGChain, clean_output
+from rag_creation.utils import RerankedFaissRetriever, UniversityRAGChain, clean_output
 
 parser = argparse.ArgumentParser('Run RAG-inference-small', add_help=False)
 parser.add_argument('--path_root', default="./llm_cacao-dragro", type=str, help='path to root data folder')

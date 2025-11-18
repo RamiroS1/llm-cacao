@@ -316,7 +316,7 @@ def initialize_llm_safe(config_name="default"):
             dspy.settings.configure(lm=lm)
         except:
             pass
-        return lm, True, "✅ Conectado"
+        return lm, True, "Conectado"
     except Exception as e:
         return None, False, f"Error DSPy: {str(e)}"
 
@@ -423,7 +423,7 @@ with st.sidebar:
                 liberar_modelo("llava")
                 st.rerun()
         else:
-            if st.button("⚡ Cargar", key="btn_on_llava", disabled=not LLAVA_AVAILABLE, use_container_width=True):
+            if st.button("⬆️ Cargar", key="btn_on_llava", disabled=not LLAVA_AVAILABLE, use_container_width=True):
                 with st.spinner("Cargando LLaVA..."):
                     ok, m = cargar_llava()
                     if not ok: st.error(m)
@@ -436,7 +436,7 @@ with st.sidebar:
                 liberar_modelo("video")
                 st.rerun()
         else:
-            if st.button("⚡ Cargar", key="btn_on_video", disabled=not VIDEOLLAMA_AVAILABLE, use_container_width=True):
+            if st.button("⬆️ Cargar", key="btn_on_video", disabled=not VIDEOLLAMA_AVAILABLE, use_container_width=True):
                 with st.spinner("Cargando VideoAI..."):
                     ok, m = cargar_video()
                     if not ok: st.error(m)
@@ -481,16 +481,34 @@ for msg in st.session_state.messages:
         if "video" in msg: st.info(f"🎥 Analizando: {msg['video']}")
         st.markdown(msg["content"])
 
-# Adjuntos
+# ============================================
+# ÁREA DE ADJUNTOS (Con claves de reseteo)
+# ============================================
+# Usamos una clave de reseteo en el session_state
+if 'upload_key_img' not in st.session_state:
+    st.session_state.upload_key_img = 0
+if 'upload_key_vid' not in st.session_state:
+    st.session_state.upload_key_vid = 0
+
 col_adj1, col_adj2, col_adj3 = st.columns([1, 1, 3])
 with col_adj1:
-    upl_img = st.file_uploader("📷", type=["jpg","png","jpeg"], label_visibility="collapsed")
+    upl_img = st.file_uploader(
+        "📷", 
+        type=["jpg","png","jpeg"], 
+        label_visibility="collapsed",
+        key=f"img_{st.session_state.upload_key_img}" # <--- CLAVE DE RESETEO
+    )
     if upl_img: 
         st.session_state.pending_image = Image.open(upl_img)
         st.caption(f"📎 {upl_img.name}")
 
 with col_adj2:
-    upl_vid = st.file_uploader("🎥", type=["mp4"], label_visibility="collapsed")
+    upl_vid = st.file_uploader(
+        "🎥", 
+        type=["mp4"], 
+        label_visibility="collapsed",
+        key=f"vid_{st.session_state.upload_key_vid}" # <--- CLAVE DE RESETEO
+    )
     if upl_vid:
         tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         tfile.write(upl_vid.read())
@@ -582,8 +600,14 @@ if prompt := st.chat_input("Describe tu problema o sube una foto..."):
         st.markdown(response_text)
         st.session_state.messages.append({"role": "assistant", "content": response_text})
     
-    # Limpiar adjuntos tras procesar
+    # A. Limpiar variables de estado internas
     st.session_state.pending_image = None
     st.session_state.pending_video = None
     st.session_state.pending_video_path = None
+
+    # B. 🔥 RESETEAR EL WIDGET DE FILE UPLOADER 🔥
+    # Al cambiar la clave, Streamlit trata el widget como uno nuevo.
+    # El archivo subido desaparece visualmente, pero su contexto ya está en messages.
+    st.session_state.upload_key_img += 1
+    st.session_state.upload_key_vid += 1
     st.rerun()

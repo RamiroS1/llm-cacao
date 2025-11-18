@@ -3,35 +3,27 @@ import tempfile
 import pdfplumber
 import fitz
 from io import BytesIO
-
 import dspy
 import faiss
 # If IVF/PQ:
 #gpu_index.nprobe = 8   # start 8→12→16 if recall needs it
 import pickle
-
 import pandas as pd
 import re, math, time, html, unicodedata
 from docx import Document
-
 from pdf2image import convert_from_path
 from difflib import SequenceMatcher
-
 from paddleocr import PPStructureV3
 from bs4 import BeautifulSoup
 import pytesseract
-
 import io
 import numpy as np
 import cv2
 import os
 import json
-
 from sklearn.preprocessing import normalize
-
 from sentence_transformers import SentenceTransformer
 from sentence_transformers import util
-
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from rag_creation.signatures import UniversityRAG
 
@@ -1017,4 +1009,3 @@ def word_to_markdown(filepath):
     print(f"✅ Texto guardado en: {output_txt}")"""
     
     return "\n\n".join(txt_output), md_output
-    

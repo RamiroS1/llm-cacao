@@ -1,17 +1,53 @@
 """
-Sistema Multi-RAG con Streamlit
+Dr. agro - Sistema Multi-RAG y Multimodal Integrado
+Chat unificado estilo ChatGPT con soporte para texto, imágenes y videos
 """
-
+import sys
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+import time
+import traceback
+import gc
+import tempfile
+from pathlib import Path
+import re
+
+# ============================================
+# GESTIÓN DE RUTAS (PATH)
+# ============================================
+# Usamos Pathlib para hacerlo compatible con Windows/Linux/Mac automáticamente
+current_dir = Path(__file__).parent.absolute()
+sys.path.append(str(current_dir.parent))
+sys.path.append(str(current_dir.parent / 'models_images'))
+sys.path.append(str(current_dir.parent / 'models_video'))
+
 import streamlit as st
 import dspy
-from rag_creation.utils import RerankedFaissRetriever, UniversityRAGChain, faster_UniversityRAGChain, clean_output
-from datetime import datetime
-import traceback
-import PIL
 import requests
 import torch
-import gc
+import PIL
+from PIL import Image
+from datetime import datetime
+
+# Importaciones del RAG (Asegúrate de que estas rutas existan en tu proyecto)
+from rag_creation.utils import RerankedFaissRetriever, UniversityRAGChain, faster_UniversityRAGChain, clean_output
+
+# ============================================
+# IMPORTACIÓN SEGURA DE MODELOS
+# ============================================
+try:
+    from Llava_LDD import LlavaPlantDiseaseDetector
+    LLAVA_AVAILABLE = True
+except ImportError:
+    LLAVA_AVAILABLE = False
+    print("⚠️ Módulo LLaVA no encontrado o con errores.")
+
+try:
+    from VideoLlama3 import VideoLlamaAgriculturalAnalyzer
+    VIDEOLLAMA_AVAILABLE = True
+except ImportError:
+    VIDEOLLAMA_AVAILABLE = False
+    print("⚠️ Módulo VideoLLaMA3 no encontrado.")
 
 # ============================================
 # CONFIGURACIÓN DE PÁGINA
@@ -26,449 +62,528 @@ if os.path.exists(icon_path):
         page_icon_obj = "🌱"
 
 st.set_page_config(
-    page_title="Asistente IA para cacao",
+    page_title="Dr. agro - Asistente IA",
     page_icon=page_icon_obj,
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ============================================
-# CSS MODERNO Y MINIMALISTA
+# CSS MODERNO
 # ============================================
 st.markdown("""
 <style>
-    .main {
-        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-    }
-    
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #e8f5e9 0%, #f1f8f4 100%);
-    }
-    
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    
-    .stChatMessage {
-        background: white;
-        border-radius: 12px;
-        padding: 16px;
-        margin: 8px 0;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-    }
-    
-    .stChatInputContainer {
-        border-top: 1px solid #e0e0e0;
-        padding-top: 16px;
-    }
-    
-    .stButton button {
-        border-radius: 8px;
-        font-weight: 500;
-        transition: all 0.2s;
-    }
-    
-    h1 {
-        color: #2e7d32;
-        font-weight: 700;
-    }
-    
-    h3 {
-        color: #43a047;
-        font-weight: 600;
-        font-size: 1.1rem;
-    }
+    .main { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }
+    [data-testid="stSidebar"] { background: linear-gradient(180deg, #e8f5e9 0%, #f1f8f4 100%); }
+    .stChatMessage { background: white; border-radius: 12px; padding: 16px; margin: 8px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+    h1 { color: #2e7d32; font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================
-# CONFIGURACIÓN OPTIMIZADA DE RAGs
+# CONFIGURACIÓN DE RAGs
 # ============================================
 RAG_CONFIG = {
     "🌱 Dr. agro Específico": {
-        "path_root": "./llm_cacao-dragro",
+        "path_root": "../llm_cacao-dragro",
         "index_name": "profiles_index.faiss",
         "docs_name": "profiles_docs.pkl",
         "model_match": "intfloat/multilingual-e5-large",
         "use_faster": False,
         "llm_config": {
-            "num_ctx": 8192,  # Contexto grande para Dr. agro
+            "num_ctx": 4096,
             "num_predict": 256,
-            "num_gpu": -1
+            "num_gpu": 1,
+            "keep_alive": "10m"
         },
-        "retriever_config": None,  # Sin config especial
         "description": "Información especializada de enfermedades y deficiencias"
     },
     "⚡ Configurado (Óptimo)": {
-        "path_root": "./data",
+        "path_root": "../data",
         "index_name": "university_index.faiss",
         "docs_name": "university_docs.pkl",
         "model_match": "intfloat/multilingual-e5-large",
         "use_faster": True,
         "top_n": 4,
         "llm_config": {
-            "num_ctx": 3072,  # Contexto reducido para velocidad
-            "num_predict": 160,  # Límite estricto de salida
+            "num_ctx": 2048,
+            "num_predict": 128,
             "top_k": 30,
             "top_p": 0.9,
-            "repeat_penalty": 1.05,
-            "num_thread": os.cpu_count(),
-            "num_batch": 1024,
-            "seed": 0,
-            "num_gpu": -1,
-            "keep_alive": "30m",
-            "stop": ["\n}\n", "\n\n", "</s>"]
-        },
-        "retriever_config": {
-            "top_k": 20,
-            "k_rerank": 8,
-            "use_reranker": False
+            "num_gpu": 1,
+            "keep_alive": "10m"
         },
         "description": "Versión optimizada para respuestas rápidas"
     }
 }
 
 # ============================================
-# INICIALIZACIÓN DE SESSION STATE
+# GESTIÓN DE ESTADO (SESSION STATE)
 # ============================================
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
-if "lm" not in st.session_state:
-    st.session_state.lm = None
-
-if "chains" not in st.session_state:
-    st.session_state.chains = {}
-
 if "current_rag" not in st.session_state:
     st.session_state.current_rag = None
-
-if "system_prompt" not in st.session_state:
-    st.session_state.system_prompt = ""
-
-if "lm_initialized" not in st.session_state:
-    st.session_state.lm_initialized = False
-
-if "current_llm_config" not in st.session_state:
-    st.session_state.current_llm_config = None
+if "chains" not in st.session_state:
+    st.session_state.chains = {}
+if "llava_loaded" not in st.session_state:
+    st.session_state.llava_loaded = False
+if "video_loaded" not in st.session_state:
+    st.session_state.video_loaded = False
+if "llava_detector" not in st.session_state:
+    st.session_state.llava_detector = None
+if "video_analyzer" not in st.session_state:
+    st.session_state.video_analyzer = None
+if "pending_image" not in st.session_state:
+    st.session_state.pending_image = None
+if "pending_video" not in st.session_state:
+    st.session_state.pending_video = None
+if "pending_video_path" not in st.session_state:
+    st.session_state.pending_video_path = None
 
 # ============================================
-# FUNCIONES PRINCIPALES
+# FUNCIONES CRUDAS (MEMORIA Y VERIFICACIÓN)
 # ============================================
 
 def liberar_memoria_cuda():
-    """Libera memoria CUDA y ejecuta garbage collection"""
+    """Libera memoria CUDA de forma segura"""
     try:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            torch.cuda.synchronize()
         gc.collect()
-    except Exception as e:
-        st.warning(f"Advertencia al liberar memoria: {str(e)}")
+    except Exception:
+        pass
 
-def initialize_llm(config_name="default"):
-    """Inicializa el modelo de lenguaje con configuración específica"""
+def liberar_modelo(model_name):
+    """Descarga un modelo específico de la GPU"""
     try:
-        # Verificar si Ollama está disponible
-        response = requests.get('http://localhost:11434/api/tags', timeout=5)
-        if response.status_code != 200:
-            return None, False, "❌ Ollama no responde"
+        if model_name == "llava" and st.session_state.llava_detector:
+            if hasattr(st.session_state.llava_detector, 'unload_model'):
+                st.session_state.llava_detector.unload_model()
+            st.session_state.llava_detector = None
+            st.session_state.llava_loaded = False
+            
+        elif model_name == "video" and st.session_state.video_analyzer:
+            if hasattr(st.session_state.video_analyzer, 'unload_model'):
+                st.session_state.video_analyzer.unload_model()
+            st.session_state.video_analyzer = None
+            st.session_state.video_loaded = False
         
-        # Obtener configuración del RAG si existe
-        llm_config = {}
-        if config_name in RAG_CONFIG:
-            llm_config = RAG_CONFIG[config_name]["llm_config"]
-        else:
-            # Config por defecto (Dr. agro)
-            llm_config = {
-                "num_ctx": 8192,
-                "format": "json"
-            }
-        
-        lm = dspy.LM(
-            'ollama_chat/mistral',
-            api_base='http://localhost:11434',
-            api_key='',
-            temperature=0,
-            model_kwargs={
-                "format": "json",
-                "options": llm_config
-            }
-        )
-        dspy.configure(lm=lm)
-        return lm, True, f"✅ Conectado ({config_name})"
-    except requests.exceptions.RequestException:
-        return None, False, "❌ Ollama no está ejecutándose"
+        liberar_memoria_cuda()
+        return True
     except Exception as e:
-        return None, False, f"❌ Error: {str(e)}"
+        st.error(f"Error al liberar {model_name}: {str(e)}")
+        return False
 
-def verificar_rag_disponible(rag_name):
-    """Verifica si los archivos necesarios del RAG existen"""
-    config = RAG_CONFIG[rag_name]
-    path_faiss = os.path.join(config["path_root"], config["index_name"])
-    path_docs = os.path.join(config["path_root"], config["docs_name"])
+def verificar_ollama():
+    """Verifica si Ollama está corriendo"""
+    try:
+        response = requests.get('http://localhost:11434/api/tags', timeout=2)
+        return response.status_code == 200, "✅ Ollama conectado"
+    except requests.exceptions.ConnectionError:
+        return False, "❌ Ollama no está corriendo"
+    except Exception as e:
+        return False, f"❌ Error: {str(e)}"
+
+# ============================================
+# FUNCIONES CORE (DSPy + RAG + MODELOS)
+# ============================================
+
+# 🔥 SOLUCIÓN AL BUG DE DSPY: @st.cache_resource 🔥
+# Esto asegura que el objeto LM se cree UNA sola vez por sesión de servidor
+# y no intente reconfigurar DSPy en cada recarga de la página.
+@st.cache_resource(show_spinner=False)
+def get_ollama_lm(config_name="default"):
+    """
+    Crea y configura la instancia de DSPy LM.
+    Cacheado para evitar errores de hilos.
+    """
+    llm_config = {}
+    if config_name in RAG_CONFIG:
+        llm_config = RAG_CONFIG[config_name]["llm_config"]
+    else:
+        llm_config = {"num_ctx": 2048, "num_predict": 128}
+
+    lm = dspy.LM(
+        'ollama_chat/mistral',
+        api_base='http://localhost:11434',
+        api_key='',
+        temperature=0,
+        model_kwargs={"format": "json", "options": llm_config}
+    )
     
-    errores = []
-    if not os.path.exists(path_faiss):
-        errores.append(f"❌ Falta: {path_faiss}")
-    if not os.path.exists(path_docs):
-        errores.append(f"❌ Falta: {path_docs}")
+    # Intentamos configurar DSPy. Si falla por hilos, lo ignoramos porque significa que ya está configurado.
+    try:
+        dspy.configure(lm=lm)
+    except Exception:
+        pass # Ignorar error si ya estaba configurado por otro hilo
+        
+    return lm
+
+def verificar_intencion_chat(text):
+    """
+    Filtro rápido para preguntas comunes que no requieren RAG.
+    Retorna la respuesta (str) o None si debe pasar al RAG.
+    """
+    if not text: return None
     
-    return len(errores) == 0, errores
+    # Limpieza básica
+    t = text.lower().strip()
+    # Eliminamos signos de puntuación para facilitar la coincidencia
+    t = re.sub(r'[^\w\s]', '', t)
+    
+    # 1. IDENTIDAD / CREADOR
+    # Preguntas sobre quién es o quién lo hizo
+    triggers_identidad = ['quien eres', 'que eres', 'como te llamas']
+    triggers_creador = ['quien te hizo', 'quien te creo', 'quien te desarrollo', 'quienes son tus creadores']
+    
+    if any(x in t for x in triggers_creador):
+        return (
+            "🛠️ Fui desarrollado por el equipo de investigación de **AGROSAVIA** "
+            "(Corporación colombiana de investigación agropecuaria), diseñado para apoyar "
+            "a productores y técnicos en el diagnóstico y manejo de cultivos."
+        )
+    
+    if any(x in t for x in triggers_identidad):
+        return (
+            "🤖 Soy **Dr. agro**, un asistente virtual basado en Inteligencia Artificial. "
+            "Estoy entrenado para responder preguntas sobre agricultura, identificar enfermedades "
+            "en imágenes y analizar videos de cultivos."
+        )
+
+    # 2. SALUDOS Y DESPEDIDAS
+    # Solo respondemos si el mensaje es corto (menos de 6 palabras)
+    # Ejemplo: "Hola" -> Responde saludo.
+    # Ejemplo: "Hola tengo una plaga" -> Pasa al RAG (es una consulta).
+    words = t.split()
+    if len(words) < 6:
+        saludos = ['hola', 'buenos dias', 'buenas tardes', 'buenas noches', 'hi', 'holi']
+        despedidas = ['adios', 'chao', 'hasta luego', 'nos vemos', 'gracias', 'muchas gracias']
+        
+        if any(x in t for x in saludos):
+            return "👋 **¡Hola!** Soy Dr. agro. ¿En qué puedo ayudarte hoy con tu cultivo?"
+            
+        if any(x in t for x in despedidas):
+            return "🤝 **¡Con gusto!** Espero haber sido de ayuda. Revisa tus cultivos frecuentemente."
+
+    return None
+
+def descargar_rags_memoria():
+    """
+    Fuerza la eliminación de los modelos de Embeddings de los RAGs
+    para dejar espacio al modelo visual LLaVA.
+    """
+    if "chains" in st.session_state and st.session_state.chains:
+        print("🧹 Limpiando RAGs para liberar VRAM...")
+        # Iteramos sobre las cadenas cargadas
+        keys_to_remove = []
+        for name, chain in st.session_state.chains.items():
+            # Intentamos acceder al modelo dentro del retriever y borrarlo
+            try:
+                if hasattr(chain, 'retriever'):
+                    if hasattr(chain.retriever, 'model'):
+                        del chain.retriever.model
+                    if hasattr(chain.retriever, 'model_match'):
+                        del chain.retriever.model_match
+            except Exception:
+                pass
+            keys_to_remove.append(name)
+        
+        # Borramos las referencias
+        st.session_state.chains = {}
+        st.session_state.current_rag = None
+        
+        # Limpieza profunda
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
+
+
+
+def initialize_llm_safe(config_name="default"):
+    """Wrapper seguro para inicializar LLM"""
+    is_running, msg = verificar_ollama()
+    if not is_running:
+        return None, False, msg
+    
+    try:
+        lm = get_ollama_lm(config_name)
+        # Re-asegurar configuración local si es necesario
+        try:
+            dspy.settings.configure(lm=lm)
+        except:
+            pass
+        return lm, True, "✅ Conectado"
+    except Exception as e:
+        return None, False, f"Error DSPy: {str(e)}"
 
 @st.cache_resource
-def load_rag(rag_name):
-    """Carga un RAG con configuración optimizada específica"""
+def load_rag_cached(rag_name):
+    """Carga el RAG y lo guarda en caché"""
+    config = RAG_CONFIG[rag_name]
+    path_root = config["path_root"]
+    path_faiss = os.path.join(path_root, config["index_name"])
+    path_docs = os.path.join(path_root, config["docs_name"])
+    
+    if not os.path.exists(path_faiss) or not os.path.exists(path_docs):
+        return None, False, "Archivos de índice no encontrados"
+
     try:
-        # Liberar memoria antes de cargar
-        liberar_memoria_cuda()
+        retriever = RerankedFaissRetriever(path_faiss, path_docs, model_match=config["model_match"])
         
-        # Verificar disponibilidad
-        disponible, errores = verificar_rag_disponible(rag_name)
-        if not disponible:
-            st.error(f"Archivos faltantes para {rag_name}:")
-            for error in errores:
-                st.error(error)
-            return None, False
-        
-        config = RAG_CONFIG[rag_name]
-        path_root = config["path_root"]
-        path_faiss = os.path.join(path_root, config["index_name"])
-        path_docs = os.path.join(path_root, config["docs_name"])
-        
-        # Crear retriever con configuración específica
-        retriever = RerankedFaissRetriever(
-            path_faiss, 
-            path_docs, 
-            model_match=config["model_match"]
-        )
-        
-        # Aplicar configuración de retriever si existe
+        # Configurar retriever si existe config
         if config.get("retriever_config"):
-            retriever_conf = config["retriever_config"]
-            if hasattr(retriever, "top_k"):
-                retriever.top_k = retriever_conf["top_k"]
-            if hasattr(retriever, "k_rerank"):
-                retriever.k_rerank = retriever_conf["k_rerank"]
-            if hasattr(retriever, "use_reranker"):
-                retriever.use_reranker = retriever_conf["use_reranker"]
-        
-        # Crear chain según configuración
+            ret_conf = config["retriever_config"]
+            for k, v in ret_conf.items():
+                if hasattr(retriever, k):
+                    setattr(retriever, k, v)
+
         if config["use_faster"]:
-            chain = faster_UniversityRAGChain(
-                retriever=retriever,
-                model_match=config["model_match"],
-                top_n=config.get("top_n", 4)
-            )
+            chain = faster_UniversityRAGChain(retriever=retriever, model_match=config["model_match"], top_n=config.get("top_n", 4))
         else:
-            chain = UniversityRAGChain(
-                retriever=retriever,
-                model_match=config["model_match"]
-            )
-        
-        return chain, True
-    
-    except RuntimeError as e:
-        if "CUDA out of memory" in str(e):
-            st.error("❌ **Memoria GPU insuficiente**")
-            st.info("""
-            **Posibles soluciones:**
-            1. Cierra otros procesos que usen GPU
-            2. Reinicia la aplicación
-            3. Ejecuta: `nvidia-smi` para ver procesos activos
-            """)
-        return None, False
+            chain = UniversityRAGChain(retriever=retriever, model_match=config["model_match"])
+            
+        return chain, True, "Cargado"
     except Exception as e:
-        st.error(f"Error cargando RAG {rag_name}: {str(e)}")
-        return None, False
+        return None, False, str(e)
 
-def consultar_rag(message):
-    """Procesa una consulta con manejo robusto de errores"""
-    # Validaciones
-    if not st.session_state.lm:
-        return "❌ **Error**: Modelo no inicializado. Por favor reinicia la aplicación."
+def cargar_llava():
+    """Carga LLaVA usando el nuevo script optimizado"""
+    if not LLAVA_AVAILABLE: return False, "Módulo no instalado"
     
-    if not st.session_state.current_rag:
-        return "❌ **Error**: Selecciona un RAG primero."
+    # 1. Si hay video, fuera.
+    if st.session_state.video_loaded:
+        liberar_modelo("video")
     
-    chain = st.session_state.chains.get(st.session_state.current_rag)
-    if not chain:
-        return f"❌ **Error**: RAG '{st.session_state.current_rag}' no disponible."
+    # 2. IMPORTANTE: Sacar los RAGs de la GPU
+    descargar_rags_memoria()
     
+    # 3. Limpieza final
+    liberar_memoria_cuda()
+    
+    if st.session_state.llava_detector is None:
+        st.session_state.llava_detector = LlavaPlantDiseaseDetector()
+    
+    # 4. Intentar cargar
     try:
-        response, context = chain(message, ext_context=st.session_state.system_prompt)
-        respuesta = clean_output(response.get("answer", "Sin respuesta"))
-        
-        return respuesta
+        success, msg = st.session_state.llava_detector.load_model()
+        if success:
+            st.session_state.llava_loaded = True
+        return success, msg
+    except RuntimeError as e:
+        if "out of memory" in str(e):
+            return False, "❌ Error VRAM: Cierra otros programas o reinicia Ollama."
+        return False, str(e)
+
+def cargar_video():
+    """Carga VideoLLaMA3"""
+    if not VIDEOLLAMA_AVAILABLE: return False, "Módulo no instalado"
     
-    except KeyError as e:
-        return f"❌ **Error en respuesta**: Clave faltante - {str(e)}"
-    except Exception as e:
-        error_msg = str(e)
-        if "connection" in error_msg.lower():
-            return "❌ **Error de conexión**: El modelo no responde. Verifica que Ollama esté ejecutándose."
-        return f"❌ **Error**: {error_msg}"
-
-# ============================================
-# INICIALIZACIÓN AUTOMÁTICA DEL LLM
-# ============================================
-if not st.session_state.lm_initialized:
-    with st.spinner("Inicializando modelo..."):
-        # Inicializar con config por defecto
-        lm, success, message = initialize_llm("default")
-        st.session_state.lm = lm
-        st.session_state.lm_initialized = True
+    if st.session_state.llava_loaded:
+        liberar_modelo("llava")
+    
+    liberar_memoria_cuda()
+    
+    if st.session_state.video_analyzer is None:
+        st.session_state.video_analyzer = VideoLlamaAgriculturalAnalyzer()
         
-        if not success:
-            st.error(f"{message}. Por favor, asegúrate de que Ollama esté ejecutándose.")
-            st.info("Para iniciar Ollama: `ollama serve`")
+    success, msg = st.session_state.video_analyzer.load_model()
+    if success:
+        st.session_state.video_loaded = True
+    return success, msg
 
 # ============================================
-# SIDEBAR OPTIMIZADO
+# LÓGICA DE INTERFAZ (SIDEBAR)
 # ============================================
 with st.sidebar:
     st.title("🌱 Dr. agro")
-    st.caption("Asistente IA para cacao")
+    st.caption("Asistente IA para Agricultura")
     st.divider()
     
-    # Estado de conexión del modelo
-    if st.session_state.lm:
-        st.success("🟢 Modelo conectado", icon="🤖")
+    # Estado Ollama
+    lm, success, msg = initialize_llm_safe("default")
+    if success:
+        st.success(msg, icon="🤖")
+        st.session_state.lm = lm
     else:
-        st.error("🔴 Modelo no disponible", icon="⚠️")
-        if st.button("🔄 Reintentar conexión"):
-            st.session_state.lm_initialized = False
-            st.rerun()
+        st.error(f"Ollama Offline: {msg}")
+        st.info("Ejecuta `ollama serve` en terminal")
     
     st.divider()
     
-    # Selector de RAG con validación
-    st.subheader("📂 Base de Conocimiento")
-    
-    # Verificar RAGs disponibles
-    rags_validos = {}
-    for nombre, config in RAG_CONFIG.items():
-        disponible, _ = verificar_rag_disponible(nombre)
-        if disponible:
-            rags_validos[nombre] = config
-    
-    if not rags_validos:
-        st.error("❌ No hay RAGs disponibles")
-        st.info("Verifica que existan los archivos .faiss y .pkl en las carpetas configuradas")
-    else:
-        rag_seleccionado = st.selectbox(
-            "Selecciona:",
-            options=list(rags_validos.keys()),
-            label_visibility="collapsed",
-            key="rag_selector"
-        )
-        
-        # Cargar RAG si cambió
-        if rag_seleccionado != st.session_state.current_rag:
-            with st.spinner(f"Cargando {rag_seleccionado}..."):
-                # Liberar RAG anterior si existe
-                if st.session_state.current_rag and st.session_state.current_rag in st.session_state.chains:
-                    del st.session_state.chains[st.session_state.current_rag]
-                    liberar_memoria_cuda()
-                
-                # Reconfigurar LLM con la config del RAG seleccionado
-                if st.session_state.current_llm_config != rag_seleccionado:
-                    lm, success, message = initialize_llm(rag_seleccionado)
-                    if success:
-                        st.session_state.lm = lm
-                        st.session_state.current_llm_config = rag_seleccionado
-                
-                # Cargar nuevo RAG
-                if rag_seleccionado not in st.session_state.chains:
-                    chain, success = load_rag(rag_seleccionado)
-                    if success:
-                        st.session_state.chains[rag_seleccionado] = chain
-                        st.session_state.current_rag = rag_seleccionado
-                        st.success(f"✅ {rag_seleccionado} cargado")
-                    else:
-                        st.error(f"❌ Error al cargar {rag_seleccionado}")
-                else:
-                    st.session_state.current_rag = rag_seleccionado
-                st.rerun()
-        
-        # Indicador visual mejorado
-        if st.session_state.current_rag:
-            config_actual = RAG_CONFIG[st.session_state.current_rag]
-            
-            st.success(f"**{st.session_state.current_rag}**", icon="✅")
-            
-            # Mostrar configuración del RAG actual
-            with st.expander("ℹ️ Detalles"):
-                st.caption(config_actual["description"])
-                st.text(f"Contexto: {config_actual['llm_config'].get('num_ctx', 'N/A')}")
-                st.text(f"Max tokens: {config_actual['llm_config'].get('num_predict', 'N/A')}")
-                if config_actual["use_faster"]:
-                    st.text(f"Top N: {config_actual.get('top_n', 'N/A')}")
-                st.text(f"Modo: {'⚡ Rápido' if config_actual['use_faster'] else '📚 Completo'}")
-    
-    st.divider()
-    
-    # Estadísticas de sesión
-    if st.session_state.messages:
-        st.metric("💬 Conversación", f"{len(st.session_state.messages) // 2} mensajes")
-    
-    st.divider()
-    
-    # Botones de control
+    # Carga de Modelos Visuales
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🗑️ Limpiar", use_container_width=True, help="Limpia el historial de chat"):
-            st.session_state.messages = []
-            st.rerun()
+        st.markdown("**Imagen**")
+        if st.session_state.llava_loaded:
+            if st.button("⬇️ Apagar", key="btn_off_llava", use_container_width=True):
+                liberar_modelo("llava")
+                st.rerun()
+        else:
+            if st.button("⚡ Cargar", key="btn_on_llava", disabled=not LLAVA_AVAILABLE, use_container_width=True):
+                with st.spinner("Cargando LLaVA..."):
+                    ok, m = cargar_llava()
+                    if not ok: st.error(m)
+                    else: st.rerun()
     
     with col2:
-        if st.button("♻️ Reset", use_container_width=True, help="Reinicia toda la aplicación"):
-            # Liberar recursos antes de reset
-            if st.session_state.chains:
-                st.session_state.chains.clear()
-            liberar_memoria_cuda()
-            st.session_state.clear()
-            st.rerun()
+        st.markdown("**Video**")
+        if st.session_state.video_loaded:
+            if st.button("⬇️ Apagar", key="btn_off_video", use_container_width=True):
+                liberar_modelo("video")
+                st.rerun()
+        else:
+            if st.button("⚡ Cargar", key="btn_on_video", disabled=not VIDEOLLAMA_AVAILABLE, use_container_width=True):
+                with st.spinner("Cargando VideoAI..."):
+                    ok, m = cargar_video()
+                    if not ok: st.error(m)
+                    else: st.rerun()
+
+    st.divider()
+    
+    # Selección de RAG
+    rag_seleccionado = st.selectbox("🧠 Cerebro (RAG):", list(RAG_CONFIG.keys()))
+    
+    # Cambio de RAG dinámico
+    if rag_seleccionado != st.session_state.current_rag:
+        with st.spinner(f"Cargando conocimientos de {rag_seleccionado}..."):
+            chain, ok, msg = load_rag_cached(rag_seleccionado)
+            if ok:
+                st.session_state.chains[rag_seleccionado] = chain
+                st.session_state.current_rag = rag_seleccionado
+                st.session_state.lm = get_ollama_lm(rag_seleccionado) # Actualizar config LLM
+                st.rerun()
+            else:
+                st.error(f"Error RAG: {msg}")
+
+    if torch.cuda.is_available():
+        gb_used = torch.cuda.memory_allocated()/1024**3
+        gb_total = torch.cuda.get_device_properties(0).total_memory/1024**3
+        st.progress(gb_used/gb_total, text=f"VRAM: {gb_used:.1f}/{gb_total:.1f} GB")
+
+    if st.button("🗑️ Limpiar Chat", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
 
 # ============================================
-# ÁREA PRINCIPAL - CHAT
+# ÁREA PRINCIPAL
 # ============================================
+#st.header("Dr. agro")
 
-# Mensaje de bienvenida
-if len(st.session_state.messages) == 0:
-    with st.chat_message("assistant", avatar="🌱"):
-        st.markdown("👋 Selecciona un RAG y hazme tu consulta sobre cacao.")
+# Historial
+for msg in st.session_state.messages:
+    avatar = "🧑‍🌾" if msg["role"] == "user" else "🌱"
+    with st.chat_message(msg["role"], avatar=avatar):
+        if "image" in msg: st.image(msg["image"], width=250)
+        if "video" in msg: st.info(f"🎥 Analizando: {msg['video']}")
+        st.markdown(msg["content"])
 
-# Mostrar historial
-for message in st.session_state.messages:
-    avatar = "🧑‍🌾" if message["role"] == "user" else "🌱"
-    with st.chat_message(message["role"], avatar=avatar):
-        st.markdown(message["content"])
+# Adjuntos
+col_adj1, col_adj2, col_adj3 = st.columns([1, 1, 3])
+with col_adj1:
+    upl_img = st.file_uploader("📷", type=["jpg","png","jpeg"], label_visibility="collapsed")
+    if upl_img: 
+        st.session_state.pending_image = Image.open(upl_img)
+        st.caption(f"📎 {upl_img.name}")
 
-# Input del usuario
-if prompt := st.chat_input("Ejemplo: ¿Cuáles son las zonas productoras de cacao?"):
-    # Validar que el sistema esté listo
-    if not st.session_state.lm:
-        st.error("⚠️ El modelo no está inicializado. Por favor reinicia la aplicación.")
-        st.stop()
+with col_adj2:
+    upl_vid = st.file_uploader("🎥", type=["mp4"], label_visibility="collapsed")
+    if upl_vid:
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+        tfile.write(upl_vid.read())
+        st.session_state.pending_video = upl_vid.name
+        st.session_state.pending_video_path = tfile.name
+        st.caption(f"📎 {upl_vid.name}")
+
+# Input
+if prompt := st.chat_input("Describe tu problema o sube una foto..."):
     
-    if not st.session_state.current_rag:
-        st.warning("⚠️ Por favor selecciona un RAG antes de consultar.")
-        st.stop()
+    # 1. Preparar mensaje usuario
+    user_msg = {"role": "user", "content": prompt}
+    if st.session_state.pending_image: user_msg["image"] = st.session_state.pending_image
+    if st.session_state.pending_video: user_msg["video"] = st.session_state.pending_video
     
-    # Agregar mensaje del usuario
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.session_state.messages.append(user_msg)
+    
+    # Mostrar inmediato
     with st.chat_message("user", avatar="🧑‍🌾"):
+        if st.session_state.pending_image: st.image(st.session_state.pending_image, width=250)
         st.markdown(prompt)
     
-    # Generar respuesta
+    # 2. Generar Respuesta
     with st.chat_message("assistant", avatar="🌱"):
-        with st.spinner("Pensando..."):
-            response = consultar_rag(prompt)
-            st.markdown(response)
-    
-    # Guardar respuesta
-    st.session_state.messages.append({"role": "assistant", "content": response})
+        response_text = ""
+        
+        # CASO A: IMAGEN (Prioridad 1)
+        if st.session_state.pending_image:
+            if not st.session_state.llava_loaded:
+                st.warning("⚠️ El motor visual (LLaVA) está apagado. Cárgalo en el menú lateral.")
+                response_text = "Por favor, activa LLaVA en el menú lateral para que pueda ver tu imagen."
+            else:
+                with st.spinner("👁️ Analizando imagen..."):
+                    ok, resp = st.session_state.llava_detector.analyze_image(
+                        st.session_state.pending_image, prompt
+                    )
+                    response_text = resp if ok else f"Error visual: {resp}"
 
-# ============================================
-# FOOTER MINIMALISTA
-# ============================================
-st.markdown("---")
+        # CASO B: VIDEO (Prioridad 2)
+        elif st.session_state.pending_video:
+            if not st.session_state.video_loaded:
+                st.warning("⚠️ El motor de video está apagado. Cárgalo en el menú lateral.")
+                response_text = "Por favor, activa VideoAI en el menú lateral."
+            else:
+                with st.spinner("🎬 Mirando video (esto toma tiempo)..."):
+                    ok, resp = st.session_state.video_analyzer.analyze_video(
+                        st.session_state.pending_video_path, prompt
+                    )
+                    response_text = resp if ok else f"Error video: {resp}"
+                    # Limpieza
+                    try: os.remove(st.session_state.pending_video_path)
+                    except: pass
+
+        # CASO C: TEXTO / RAG (Default)
+        else:
+            # ---------------------------------------------------------
+            # 1. INTENTO DE CHAT RÁPIDO (Sin RAG)
+            # ---------------------------------------------------------
+            fast_response = verificar_intencion_chat(prompt)
+            
+            if fast_response:
+                response_text = fast_response
+            
+            # ---------------------------------------------------------
+            # 2. CONSULTA AL RAG (Si no es un saludo/pregunta simple)
+            # ---------------------------------------------------------
+            else:
+                if not st.session_state.current_rag or st.session_state.current_rag not in st.session_state.chains:
+                    st.warning("⚠️ RAG no cargado. Selecciona uno en el sidebar.")
+                    response_text = "No tengo acceso a mi base de conocimientos. Por favor selecciona un 'Cerebro' en el menú lateral."
+                else:
+                    with st.spinner("📖 Consultando manuales..."):
+                        try:
+                            chain = st.session_state.chains[st.session_state.current_rag]
+                            
+                            # Contexto del sistema (experto agrícola)
+                            sys_context = st.session_state.get("system_prompt", "Eres un experto agrícola de Agrosavia.")
+                            
+                            # Llamada al RAG
+                            res, _ = chain(question=prompt, ext_context=sys_context) 
+                            
+                            response_text = clean_output(res.get("answer", "Sin respuesta"))
+                        except Exception as e:
+                            # Manejo de errores silencioso para el usuario
+                            print(f"Error RAG: {str(e)}")
+                            response_text = "Lo siento, tuve un problema técnico consultando mis manuales. ¿Podrías reformular la pregunta?"
+
+        # Mostrar respuesta final (sea del Fast Path o del RAG)
+        st.markdown(response_text)
+        st.session_state.messages.append({"role": "assistant", "content": response_text})
+    
+    # Limpiar adjuntos tras procesar
+    st.session_state.pending_image = None
+    st.session_state.pending_video = None
+    st.session_state.pending_video_path = None
+    st.rerun()
